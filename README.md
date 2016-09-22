@@ -30,17 +30,19 @@ event updates. The default is 30.
 # Navigation
 
 ## General
-TAB     : Navigates between things
-q/Q/Esc : CLoses/quits things
+
+    TAB     : Navigates between things
+    q/Q/Esc : CLoses/quits things
 
 ## Main Window
-R   : Refresh event list
-f   : Show event filter menu
-A   : Acknowledge selected event
-C   : Close selected event
-O   : Reopen selected event
+
+    R   : Refresh event list
+    f   : Show event filter menu
+    A   : Acknowledge selected event
+    C   : Close selected event
+    O   : Reopen selected event
 
 ## Main Window - Event Info focused
-y   : Copy selected line to clipboard
-Y   : Copy all lines to clipboard
 
+    y   : Copy selected line to clipboard
+    Y   : Copy all lines to clipboard
