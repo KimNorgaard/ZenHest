@@ -534,7 +534,8 @@ class UI(object):
 
     def _get_footer(self):
         self.footer = urwid.Text(
-            u"ZenHest  -  Refresh(R) Filter(f) Ack(A) Close(C) Reopen(O) Quit(q)")
+            (u"ZenHest  -  Refresh(R) Filter(f) Ack(A) Close(C) Reopen(O) "
+             u"Copy All Info(Y) Copy Selected Info(y) Quit(q)"))
 
         return urwid.AttrMap(urwid.Padding(self.footer, left=1, right=1), 'footer')
 
