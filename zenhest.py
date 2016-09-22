@@ -1,34 +1,43 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+"""Text based Zenoss event console."""
 
-import urwid
-import urllib2
-import json
-import base64
-import keyring
 import os
 import sys
 import re
+import logging
+import urllib2
+import json
+import base64
+
+import urwid
+import keyring
 import clipboard
 
-# FIXME: log file should be done right
-import logging
-logger = logging.getLogger('myapp')
-hdlr = logging.FileHandler('/tmp/myapp.log')
-formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
-hdlr.setFormatter(formatter)
-logger.addHandler(hdlr)
-logger.setLevel(logging.WARNING)
+
+def log_debug(msg):
+    """Log debug message."""
+    try:
+        logger.debug(msg)
+    except NameError:
+        pass
+
+if os.getenv('ZENHEST_DEBUG', None):
+    logging.basicConfig(
+        filename='/tmp/zenhest.log',
+        format='%(asctime)s %(levelname)s %(message)s',
+        level=logging.DEBUG)
+    logger = logging.getLogger(__name__)
+
+
+log_debug('test')
 
 
 # ---- ZENOSS CLASSES ----
 
+class ZenEvents(object):
 
-class ZenEvents:
-
-    """
-    Interface with the Zenoss API
-    """
+    """Interface with the Zenoss API."""
 
     severities = {
         5: 'crit',
@@ -49,6 +58,9 @@ class ZenEvents:
         }
 
     class Unauthorized(Exception):
+
+        """Thrown when authentation failed."""
+
         pass
 
     def __init__(self, url, username, password):
@@ -70,7 +82,7 @@ class ZenEvents:
         }
 
     def update(self):
-        """ Updates and sorts self.events """
+        """Update and sort self.events."""
         self.fetch_events()
         self.events = sorted(self.raw_events['result']['events'],
                              key=lambda k: (k['eventState'],
@@ -79,16 +91,14 @@ class ZenEvents:
                              reverse=True)
         return self.events
 
-    def _req(self, method='query', evids=None, params=None,
-             limit=None):
-        """ Perform API request to Zenoss """
+    def _req(self, method='query', evids=None, params=None, limit=None):
+        """Perform API request to Zenoss."""
         headers = {'Content-Type': 'application/json'}
 
         data = {
             'action': 'EventsRouter',
             'method': method,
-            'data': [{
-            }],
+            'data': [{}],
             'type': 'rpc',
             'tid': 1
         }
@@ -105,12 +115,14 @@ class ZenEvents:
         req = urllib2.Request(self.url, json.dumps(data), headers)
 
         authstr = base64.b64encode('{}:{}'.format(self.username, self.password))
+
         req.add_header('Authorization', 'Basic {}'.format(authstr))
 
         res = urllib2.urlopen(req)
         return res
 
     def get_event(self, evid):
+        """Get a single event."""
         params = {'evid': evid}
         res = self._req(method='query', params=params, limit=1)
         data = json.loads(res.read())
@@ -121,27 +133,28 @@ class ZenEvents:
             return {}
 
     def ack_events(self, evids):
+        """Ack events."""
         res = self._req(method='acknowledge', evids=evids, limit=1)
         data = json.loads(res.read())
         res.close()
         return data['result']['data']
 
     def close_events(self, evids):
+        """Close events."""
         res = self._req(method='close', evids=evids, limit=1)
         data = json.loads(res.read())
         res.close()
         return data['result']['data']
 
     def reopen_events(self, evids):
+        """Reopen events."""
         res = self._req(method='reopen', evids=evids, limit=1)
         data = json.loads(res.read())
         res.close()
         return data['result']['data']
 
     def login(self):
-        """
-        Performs an API request and tries to catch authentication failure
-        """
+        """Perform an API request and try to catch authentication failure."""
         params = {'severity': [1], 'eventState': [0], 'prodState': [1000]}
         res = self._req(params=params, limit=1)
         content = res.read()
@@ -150,7 +163,7 @@ class ZenEvents:
         res.close()
 
     def fetch_events(self, limit=1000):
-        """ Fetches the raw events from Zenoss """
+        """Fetch the raw events from Zenoss."""
         res = self._req(params=self.params, limit=limit)
         content = res.read()
         self.raw_events = json.loads(content)
@@ -161,9 +174,7 @@ class ZenEvents:
 
 class EventInfoBox(urwid.ListBox):
 
-    """
-    A urwid.ListBox holding information about a selected event.
-    """
+    """A urwid.ListBox holding information about a selected event."""
 
     def __init__(self, body):
         super(EventInfoBox, self).__init__(body)
@@ -182,15 +193,13 @@ class EventInfoBox(urwid.ListBox):
             clipboard.copy(self.get_focus()[0].original_widget.text)
         elif key == 'Y':
             text = ''
-            for w in self.body:
-                if (isinstance(w, urwid.AttrMap) and
-                        hasattr(w.original_widget, 'text')):
-                    text += w.original_widget.text
+            for widget in self.body:
+                if isinstance(widget, urwid.AttrMap) and hasattr(widget.original_widget, 'text'):
+                    text += widget.original_widget.text
                     text += '\n'
             if text:
                 clipboard.copy(text)
-        elif key in ('up', 'down', 'right', 'left',
-                     'page up', 'page down', 'j', 'k'):
+        elif key in ('up', 'down', 'right', 'left', 'page up', 'page down', 'j', 'k'):
             super(EventInfoBox, self).keypress(size, key)
 
         return key
@@ -198,9 +207,7 @@ class EventInfoBox(urwid.ListBox):
 
 class EventListBox(urwid.ListBox):
 
-    """
-    A urwid.ListBox holding a list of Zenoss events.
-    """
+    """A urwid.ListBox holding a list of Zenoss events."""
 
     def __init__(self, body):
         super(EventListBox, self).__init__(body)
@@ -222,8 +229,7 @@ class EventListBox(urwid.ListBox):
         elif key == 'end':
             self.set_focus(len(self.body)-1)
             self._invalidate()
-        elif key in ('up', 'down', 'right', 'left',
-                     'page up', 'page down', 'j', 'k'):
+        elif key in ('up', 'down', 'right', 'left', 'page up', 'page down', 'j', 'k'):
             super(EventListBox, self).keypress(size, key)
 
         # A new event has been selected. Update info about it.
@@ -234,13 +240,10 @@ class EventListBox(urwid.ListBox):
 
 class NoKeyNavPile(urwid.Pile):
 
-    """
-    A urwid.Pile that disables arrow navigation as this is handled by the
-    EventListBox.
-    """
+    """A urwid.Pile that disables arrow navigation."""
 
     def keypress(self, size, key):
-        if key not in ['up', 'down', 'left', 'right', 'j', 'k']:
+        if key not in ('up', 'down', 'left', 'right', 'j', 'k'):
             return super(NoKeyNavPile, self).keypress(size, key)
         else:
             return self.get_focus().keypress(size, key)
@@ -248,9 +251,7 @@ class NoKeyNavPile(urwid.Pile):
 
 class SelectableText(urwid.Text):
 
-    """
-    A urwid.Text that can be selected.
-    """
+    """A urwid.Text that can be selected."""
 
     def keypress(self, size, key):
         return key
@@ -261,122 +262,105 @@ class SelectableText(urwid.Text):
 
 class EventText(SelectableText):
 
-    """
-    A Zenoss event represented as a formatted line.
-    """
+    """A Zenoss event represented as a formatted line."""
 
     def __init__(self, event, parent_width):
-        """
-        event: an event at represented in the ZenEvent.events list
-        parent_width: width of the parent widget of the event text
+        """Constructor.
+
+        :param event: an event at represented in the ZenEvent.events list
+        :param parent_width: width of the parent widget of the event text
         """
         sep = u' │ '
-        severity_len = 5
-        event_state_len = 1
-        count_len = 4
-        title_len = 30
-        comp_len = 15
         sep_len = len(sep) * 5  # 5 because there are 5 separators
-        fixed_len = (severity_len + event_state_len + count_len + title_len +
-                     comp_len + sep_len)
-        summary_len = parent_width-fixed_len
-        severity = self.short(severity_len,
-                              ZenEvents.severities[event['severity']]).upper()
-        event_state = self.short(event_state_len, event['eventState']).upper()
-        count = self.short(count_len, event['count'])
-        title = self.short(title_len, event['details']['device_title'][0], True)
-        comp = self.short(comp_len, event['component']['text'] or '', True)
-        summary = self.short(summary_len, event['summary'], True)
-        msg = (u"{:{severity_len}}{sep}{:{event_state_len}}{sep}{:{count_len}}"
-               u"{sep}{:{title_len}}{sep}{:{comp_len}}{sep}{}").format(
-            severity, event_state, count, title, comp, summary,
-            sep=sep, severity_len=severity_len, event_state_len=event_state_len,
-            count_len=count_len, title_len=title_len,
-            comp_len=comp_len)
+
+        # severity, event state, count, title, component
+        lengths = (5, 1, 4, 30, 15)
+
+        # summary length is whatever remains of the parent widget's width
+        summary_length = parent_width - (sum(lengths) + sep_len)
+
+        msg_text = (u"{:{lengths[0]}}{sep}{:{lengths[1]}}{sep}{:{lengths[2]}}"
+                    u"{sep}{:{lengths[3]}}{sep}{:{lengths[4]}}{sep}{}")
+
+        msg = msg_text.format(
+            self.short(lengths[0], ZenEvents.severities[event['severity']]).upper(),
+            self.short(lengths[1], event['eventState']).upper(),
+            self.short(lengths[2], event['count']),
+            self.short(lengths[3], event['details']['device_title'][0], True),
+            self.short(lengths[4], event['component']['text'] or '', True),
+            self.short(summary_length, event['summary'], True),
+            sep=sep, lengths=lengths)
+
         super(EventText, self).__init__(msg)
 
-    def short(self, length, text, dots=False):
-        """
-        Shortens a string and optionally replaces the last two characters
-        with dots.
-        """
+    @classmethod
+    def short(cls, length, text, dots=False):
+        """Shorten text. Optionally replace last two characters with dots."""
         text = str(text).replace('\n', '').replace('\t', '')
         if len(text) > length and dots:
             return text[:length-2] + '..'
         return text[:length]
 
 
+class EventFilterCheckbox(urwid.CheckBox):
+
+    """Checkbox used in the event filter window."""
+
+    def __init__(self, window, caption, user_data, state=False):
+        self.window = window
+        super(EventFilterCheckbox, self).__init__(caption, state=state)
+        urwid.connect_signal(self, 'change', self.checkbox_changed, user_data)
+
+    def checkbox_changed(self, checkbox, state, user_data):
+        """Forward checkbox changes to the signal handler."""
+        urwid.emit_signal(self.window, 'change_filter', state, *user_data)
+
+
 class EventFilterWindow(urwid.Overlay):
 
-    """
-    A widget for setting event filters.
-    """
+    """A widget for setting event filters."""
 
     def __init__(self, top_w):
-        urwid.register_signal(EventFilterWindow, ['event_filter_close',
-                                                  'change_filter',
-                                                  'update_event_list'])
-
-        filters = urwid.SimpleListWalker([])
-
-        sections = [
-            {
-                'title': 'Event states',
-                'field': 'eventState',
-                'items': [
-                    ['New', True, 0],
-                    ['Acknowledged', False, 1],
-                    ['Closed', False, 3],
-                    ['Cleared', False, 4],
-                ]
-            },
-            {
-                'title': 'Production states',
-                'field': 'prodState',
-                'items': [
-                    ['Production', True, 1000],
-                    ['Maintenance', False, 300],
-                ]
-            },
-            {
-                'title': 'Severities',
-                'field': 'severity',
-                'items': [
-                    ['Critical', True, 5],
-                    ['Error', True, 4],
-                    ['Warning', True, 3],
-                    ['Clear', False, 0],
-                ]
-            }]
+        urwid.register_signal(
+            EventFilterWindow,
+            ['event_filter_close', 'change_filter', 'update_event_list'])
 
         columns = []
+        columns.append(urwid.Padding(urwid.Pile([
+            urwid.Text(('standout', 'Event state')),
+            EventFilterCheckbox(self, 'New', ('eventState', 0), True),
+            EventFilterCheckbox(self, 'Acknowledged', ('eventState', 1)),
+            EventFilterCheckbox(self, 'Closed', ('eventState', 3)),
+            EventFilterCheckbox(self, 'Cleared', ('eventState', 4)),
+            ]), left=1, right=1))
 
-        # Create checkbox piles and put them in columns
-        for s in sections:
-            items = [urwid.Text(('standout', s['title']))]
-            items.extend([
-                urwid.CheckBox(i[0], on_state_change=self._state_change,
-                               state=i[1], user_data=(s['field'], i[2]))
-                for i in s['items']])
-            columns.append(urwid.Padding(urwid.Pile(items), left=1, right=1))
+        columns.append(urwid.Padding(urwid.Pile([
+            urwid.Text(('standout', 'Production state')),
+            EventFilterCheckbox(self, 'Production', ('prodState', 1000), True),
+            EventFilterCheckbox(self, 'Maintenance', ('prodState', 300)),
+            ]), left=1, right=1))
+
+        columns.append(urwid.Padding(urwid.Pile([
+            urwid.Text(('standout', 'Severity')),
+            EventFilterCheckbox(self, 'Critical', ('severity', 5), True),
+            EventFilterCheckbox(self, 'Error', ('severity', 4), True),
+            EventFilterCheckbox(self, 'Warning', ('severity', 3), True),
+            EventFilterCheckbox(self, 'Clear', ('severity', 0)),
+            ]), left=1, right=1))
+
+        filters = urwid.SimpleListWalker([])
 
         # Construct window content
         filters.append(urwid.Text('EVENT FILTERS', 'center'))
         filters.append(urwid.Divider())
         filters.append(urwid.AttrMap(urwid.Columns(columns), 'panel'))
         filters.append(urwid.Divider())
-        filters.append(urwid.Text("Settings are applied on next update.",
-                                  'center'))
-        filters.append(urwid.Text(
-            "Press ESC or 'q' to close window. 'R' to refresh.", 'center'))
+        filters.append(urwid.Text("Settings are applied on next update.", 'center'))
+        filters.append(urwid.Text("Press ESC or 'q' to close window. 'R' to refresh.", 'center'))
 
         wrap = urwid.LineBox(urwid.ListBox(filters))
-        super(EventFilterWindow, self).__init__(wrap, top_w, 'center', 80,
-                                                'middle', 24)
 
-    def _state_change(self, checkbox, state, data):
-        """ Forwards checkbox changes to the signal handler. """
-        urwid.emit_signal(self, 'change_filter', state, data[0], data[1])
+        super(EventFilterWindow, self).__init__(wrap, top_w, 'center', 80, 'middle', 24)
 
     def keypress(self, size, key):
         if key in('q', 'Q', 'esc'):
@@ -389,21 +373,15 @@ class EventFilterWindow(urwid.Overlay):
 
 class LoginWindow(urwid.Overlay):
 
-    """
-    A widget for handling the login window.
-    """
+    """A widget for handling the login window."""
 
     def __init__(self, username='', password=''):
         urwid.register_signal(LoginWindow, ['authenticate', 'quit'])
 
-        self.username_w = urwid.Edit(('body', 'Username : '),
-                                     edit_text=username)
-        self.password_w = urwid.Edit(('body', 'Password : '), mask='*',
-                                     edit_text=password)
-        username_wrap = urwid.AttrMap(urwid.Padding(self.username_w), 'input',
-                                      'input.focus')
-        password_wrap = urwid.AttrMap(urwid.Padding(self.password_w), 'input',
-                                      'input.focus')
+        self.username_w = urwid.Edit(('body', 'Username : '), edit_text=username)
+        self.password_w = urwid.Edit(('body', 'Password : '), mask='*', edit_text=password)
+        username_wrap = urwid.AttrMap(urwid.Padding(self.username_w), 'input', 'input.focus')
+        password_wrap = urwid.AttrMap(urwid.Padding(self.password_w), 'input', 'input.focus')
 
         login_btn = urwid.Button('Login')
         urwid.connect_signal(login_btn, 'click', self._authenticate)
@@ -424,19 +402,18 @@ class LoginWindow(urwid.Overlay):
         self.box = urwid.LineBox(urwid.Padding(self.items, left=2, right=2))
 
         wrap = urwid.Filler(urwid.AttrMap(self.box, 'body'))
-        bg = urwid.SolidFill(' ')
+        background = urwid.SolidFill(' ')
 
-        super(LoginWindow, self).__init__(wrap, bg, 'center', 80, 'middle', 24)
+        super(LoginWindow, self).__init__(wrap, background, 'center', 80, 'middle', 24)
 
     def _authenticate(self, data=None):
-        urwid.emit_signal(self, 'authenticate',
-                          self.username_w.edit_text,
-                          self.password_w.edit_text)
+        urwid.emit_signal(self, 'authenticate', self.username_w.edit_text, self.password_w.edit_text)
 
     def _quit(self, data=None):
         urwid.emit_signal(self, 'quit')
 
     def set_message(self, message):
+        """Extend the dialog title with a message."""
         self.title_w.set_text([self.title, ('login.message', ' - ' + message)])
 
     def keypress(self, size, key):
@@ -472,9 +449,7 @@ class LoginWindow(urwid.Overlay):
 
 class MainFrame(urwid.Frame):
 
-    """
-    This is the main window widget.
-    """
+    """This is the main window widget."""
 
     def __init__(self, *args, **kwargs):
         urwid.register_signal(MainFrame, ['update_event_list', 'quit',
@@ -484,22 +459,20 @@ class MainFrame(urwid.Frame):
 
         super(MainFrame, self).__init__(*args, **kwargs)
 
-    def keypress(self, size, key):  # noqa: C901
-        if key in ('q', 'Q', 'esc'):
-            urwid.emit_signal(self, 'quit')
-        elif key == 'R':
-            urwid.emit_signal(self, 'update_event_list')
-        elif key == 'A':
-            urwid.emit_signal(self, 'ack_event')
-        elif key == 'C':
-            urwid.emit_signal(self, 'close_event')
-        elif key == 'O':
-            urwid.emit_signal(self, 'reopen_event')
-        # TODO: implement it
-        elif key == 'J':
-            urwid.emit_signal(self, 'create_jira')
-        elif key == 'f':
-            urwid.emit_signal(self, 'show_event_filter')
+    def keypress(self, size, key):
+        signal_keys = {
+            'q': 'quit', 'Q': 'quit', 'esc': 'quit',
+            'R': 'update_event_list',
+            'A': 'ack_event',
+            'C': 'close_event',
+            'O': 'reopen_event',
+            # TODO: not imeplemented yet
+            'J': 'create_jira',
+            'f': 'show_event_filter',
+        }
+
+        if signal_keys.get(key):
+            urwid.emit_signal(self, signal_keys[key])
         elif key == 'tab':
             columns = self.body.contents[1][0]
             # switch from event list to event info
@@ -514,44 +487,44 @@ class MainFrame(urwid.Frame):
             elif (columns.focus_position == 1 and
                   self.focus_position == 'body'):
                 self.body.set_focus(0)
+
         return super(MainFrame, self).keypress(size, key)
 
 
 class UI(object):
 
-    """
-    The main UI class for setting up the interface bits.
-    """
+    """The main UI class for setting up the interface bits."""
 
     def __init__(self):
         self.event_list = urwid.SimpleFocusListWalker([])
         self.list_box = EventListBox(self.event_list)
 
+        # Event info box
         self.event_info = urwid.SimpleFocusListWalker([])
-        bottom_left_frame = EventInfoBox(self.event_info)
+        event_info_frame = EventInfoBox(self.event_info)
+        event_info_frame_wrap = urwid.AttrMap(
+            urwid.LineBox(
+                urwid.Padding(event_info_frame, left=1, right=1)
+            ), 'infobox', 'focus_frame')
 
         # TODO: not used yet - graph maybe? or log window?
         bottom_right_frame = urwid.ListBox([urwid.Text('')])
+        bottom_right_frame_wrap = urwid.AttrMap(
+            urwid.LineBox(
+                urwid.Padding(bottom_right_frame, left=1, right=1)
+            ), 'infobox', 'focus_frame')
 
-        self.body_columns = urwid.Columns([
-            urwid.AttrMap(
-                urwid.LineBox(
-                    urwid.Padding(bottom_left_frame, left=1, right=1)
-                ), 'infobox', 'reversed'),
-            urwid.AttrMap(
-                urwid.LineBox(bottom_right_frame), 'infobox', 'reversed'),
-        ])
+        # Event list box
+        event_list_wrap = urwid.AttrMap(
+            urwid.LineBox(
+                urwid.Padding(self.list_box, left=1, right=1)
+            ), 'eventlist', 'focus_frame')
 
-        self.body = NoKeyNavPile([
-            urwid.AttrMap(
-                urwid.LineBox(
-                    urwid.Padding(self.list_box, left=1, right=1)
-                ), 'eventlist', 'reversed'),
-            self.body_columns
-        ])
+        self.body_bottom = urwid.Columns([event_info_frame_wrap, bottom_right_frame_wrap])
 
-        self.main_frame = MainFrame(self.body, footer=self._get_footer(),
-                                    focus_part='body')
+        self.body = NoKeyNavPile([event_list_wrap, self.body_bottom])
+
+        self.main_frame = MainFrame(self.body, footer=self._get_footer(), focus_part='body')
 
         self.event_filter_window = EventFilterWindow(self.main_frame)
 
@@ -561,13 +534,12 @@ class UI(object):
 
     def _get_footer(self):
         self.footer = urwid.Text(
-            (u"Welcome to ZenHest! "
-             u" Refresh(r) Quit(q) Ack(a) Filter(f)"))
+            u"ZenHest  -  Refresh(R) Filter(f) Ack(A) Close(C) Reopen(O) Quit(q)")
 
-        return urwid.AttrMap(
-            urwid.Padding(self.footer, left=1, right=1), 'footer')
+        return urwid.AttrMap(urwid.Padding(self.footer, left=1, right=1), 'footer')
 
     def init_login_window(self, username, password):
+        """Create the login window."""
         self.login_window = LoginWindow(username, password)
 
 
@@ -576,9 +548,7 @@ class UI(object):
 
 class ZenHest(object):
 
-    """
-    Main class - instantiates the UI and handles logic.
-    """
+    """Main class - instantiates the UI and handles logic."""
 
     smiley = """
                           ooo$$$$$$$$$$$$oooo
@@ -613,21 +583,27 @@ oo $ $ \"$      o$$$$$$$$$    $$$$$$$$$$$$$    $$$$$$$$$o       $$$o$$o$
         # Holds currently loaded zenoss events
         self.z_events = []
 
+        self.zen_username = None
+        self.zen_password = None
+        self.zenoss = None
+
         self._setup_env()
         self._setup_auth()
         self._setup_ui()
         self._setup_signals()
 
     def _setup_env(self):
+        """Setup configuration from environment."""
         self.zen_url = os.getenv('ZENHEST_URL', None)
         if self.zen_url is None:
-            print("ZENHEST_URL not set. Exiting.")
+            print("ZENHEST_URL not set. Set it to 'http(s)://server:port'.")
             sys.exit(1)
 
         self.keyring_name = os.getenv('ZENHEST_KEYRING', 'zenhest')
         self.update_interval = int(os.getenv('ZENHEST_UPDATE_INTERVAL', 30))
 
     def _setup_auth(self):
+        """Setup authentication parameters."""
         # True if password was retrieved from keychain
         self.auto_login = False
 
@@ -647,32 +623,34 @@ oo $ $ \"$      o$$$$$$$$$    $$$$$$$$$$$$$    $$$$$$$$$o       $$$o$$o$
             self.zen_password = ''
 
     def _setup_ui(self):
+        """Setup the user interface."""
         palette = [
-            ('body', 'light gray', 'default'),
-            ('eventlist', 'light gray', 'default'),
-            ('login.title', 'white', 'default'),
-            ('login.message', 'light red', 'default'),
-            ('infobox', 'light gray', 'default'),
-            ('infobox.focus', 'white', 'dark blue'),
+            ('body', 'light gray', 'black'),
+            ('eventlist', 'light gray', 'black'),
+            ('login.title', 'white', 'black'),
+            ('login.message', 'light red', 'black'),
+            ('infobox', 'light gray', 'black'),
+            ('infobox.focus', 'black', 'light gray'),
+            ('focus_frame', 'yellow', 'black'),
             ('input', 'light gray', 'black'),
-            ('input.focus', 'white', 'dark gray'),
-            ('panel', 'light gray', 'default'),
-            ('btn', 'white', 'dark cyan'),
-            ('btn.focus', 'white', 'dark blue'),
-            ('footer', 'yellow', 'dark red'),
-            ('event.focus', 'white', 'dark blue'),
+            ('input.focus', 'black', 'light gray'),
+            ('panel', 'light gray', 'black'),
+            ('btn', 'white', 'dark gray'),
+            ('btn.focus', 'black', 'light gray'),
+            ('footer', 'black', 'dark cyan'),
+            ('event.focus', 'black', 'light gray'),
             # critical
             ('severity_5', 'black', 'dark red'),
             # error
             ('severity_4', 'black', 'brown'),
             # warning
-            ('severity_3', 'light gray', 'default'),
+            ('severity_3', 'light gray', 'black'),
             # info
-            ('severity_2', 'light gray', 'default'),
+            ('severity_2', 'light gray', 'black'),
             # debug
-            ('severity_1', 'light gray', 'default'),
+            ('severity_1', 'light gray', 'black'),
             # clear
-            ('severity_0', 'light gray', 'default'),
+            ('severity_0', 'light gray', 'black'),
             ]
 
         self.ui = UI()
@@ -684,44 +662,36 @@ oo $ $ \"$      o$$$$$$$$$    $$$$$$$$$$$$$    $$$$$$$$$o       $$$o$$o$
         self.main_loop.screen.set_terminal_properties(256)
 
     def _setup_signals(self):
+        """Setup signals."""
         # Event list
-        urwid.connect_signal(self.ui.list_box, 'update_event_info',
-                             self._update_event_info)
+        urwid.connect_signal(self.ui.list_box, 'update_event_info', self._update_event_info)
 
         # Login window
         urwid.connect_signal(self.ui.login_window, 'authenticate', self.login)
         urwid.connect_signal(self.ui.login_window, 'quit', self.quit)
 
         # Main window
-        urwid.connect_signal(self.ui.main_frame, 'update_event_list',
-                             self._update_event_list)
+        urwid.connect_signal(self.ui.main_frame, 'update_event_list', self._update_event_list)
         urwid.connect_signal(self.ui.main_frame, 'quit', self.quit)
-        urwid.connect_signal(self.ui.main_frame, 'show_event_filter',
-                             self.show_event_filter_window)
+        urwid.connect_signal(self.ui.main_frame, 'show_event_filter', self.show_event_filter_window)
         urwid.connect_signal(self.ui.main_frame, 'ack_event', self.ack_event)
-        urwid.connect_signal(self.ui.main_frame, 'close_event',
-                             self.close_event)
-        urwid.connect_signal(self.ui.main_frame, 'reopen_event',
-                             self.reopen_event)
+        urwid.connect_signal(self.ui.main_frame, 'close_event', self.close_event)
+        urwid.connect_signal(self.ui.main_frame, 'reopen_event', self.reopen_event)
 
         # Event filter window
-        urwid.connect_signal(self.ui.event_filter_window,
-                             'update_event_list', self._update_event_list)
-        urwid.connect_signal(self.ui.event_filter_window,
-                             'event_filter_close',
-                             self.show_main_window)
-        urwid.connect_signal(self.ui.event_filter_window, 'change_filter',
-                             self._change_zenoss_parameter)
+        urwid.connect_signal(self.ui.event_filter_window, 'update_event_list', self._update_event_list)
+        urwid.connect_signal(self.ui.event_filter_window, 'event_filter_close', self.show_main_window)
+        urwid.connect_signal(self.ui.event_filter_window, 'change_filter', self._change_zenoss_parameter)
 
     def _change_zenoss_parameter(self, state, param, value):
+        """Signal handler used for changing zenoss paramters."""
         if state:
             self.zenoss.params[param].append(value)
         else:
             self.zenoss.params[param].remove(value)
 
     def _update_event_info(self):
-        """ Updates event info with data from selected event. """
-
+        """Signal handler used to update info about the selected event."""
         # Only update info if an event is in focus
         try:
             idx = self.ui.list_box.focus_position
@@ -731,8 +701,6 @@ oo $ $ \"$      o$$$$$$$$$    $$$$$$$$$$$$$    $$$$$$$$$o       $$$o$$o$
             return
 
         info_map = [
-            SelectableText(event['message']),
-            urwid.Divider('-'),
             ('Device', event['details']['device_title'][0]),
             ('Severity', ZenEvents.severities[event['severity']]),
             ('Count', event['count']),
@@ -744,29 +712,24 @@ oo $ $ \"$      o$$$$$$$$$    $$$$$$$$$$$$$    $$$$$$$$$o       $$$o$$o$
             ('Last seen', event['lastTime']),
             ('State change', event['stateChange']),
             ('DeviceClass', event['DeviceClass'][0]['name']),
-            ('Location', ', '.join(l['name'] for l in event['Location']
-                                   if l['name'])),
-            ('Groups', ', '.join(l['name'] for l in event['DeviceGroups']
-                                 if l['name'])),
-            ('Systems', ', '.join(l['name'] for l in event['Systems']
-                                  if l['name'])),
+            ('Location', ', '.join(l['name'] for l in event['Location'] if l['name'])),
+            ('Groups', ', '.join(l['name'] for l in event['DeviceGroups'] if l['name'])),
+            ('Systems', ', '.join(l['name'] for l in event['Systems'] if l['name'])),
             ('EVID', event['evid']),
         ]
 
         # Replace previous event info with new
         del self.ui.event_info[:]
-        for i in info_map:
-            if isinstance(i, tuple):
-                i = SelectableText("{:20} : {!s}".format(i[0], i[1]))
+        self.ui.event_info.append(urwid.AttrMap(
+            SelectableText(event['message']), 'infobox', 'infobox.focus'))
+        self.ui.event_info.append(urwid.Divider('-'))
 
-            self.ui.event_info.append(
-                    urwid.AttrMap(i, 'infobox', 'infobox.focus'))
+        self.ui.event_info.extend([
+            urwid.AttrMap(SelectableText("{:20} : {!s}".format(*i)), 'infobox', 'infobox.focus')
+            for i in info_map])
 
     def _update_event_list(self, caller=None, use_zenoss=True):
-        """ Updates the event list. """
-
-        logger.error(caller)
-        logger.error(use_zenoss)
+        """Signal handler to update the event list."""
         # Save current focus position for later use
         try:
             saved_focus_idx = self.ui.list_box.focus_position
@@ -792,8 +755,7 @@ oo $ $ \"$      o$$$$$$$$$    $$$$$$$$$$$$$    $$$$$$$$$o       $$$o$$o$
         # Try to restore focus
         if saved_focus_idx:
             try:
-                new_idx = next(i for (i, e) in enumerate(self.z_events) if
-                               e['evid'] == saved_evid)
+                new_idx = next(i for (i, e) in enumerate(self.z_events) if e['evid'] == saved_evid)
                 self.ui.event_list.set_focus(new_idx)
             except StopIteration:
                 pass
@@ -803,21 +765,16 @@ oo $ $ \"$      o$$$$$$$$$    $$$$$$$$$$$$$    $$$$$$$$$o       $$$o$$o$
 
         # Show HHGTTG smiley if there are no events
         if not len(self.z_events):
-            self.ui.list_box.body[:] = [urwid.Padding(urwid.Text(self.smiley),
-                                                      'center', 75)]
+            self.ui.list_box.body[:] = [urwid.Padding(urwid.Text(self.smiley), 'center', 75)]
             del self.ui.event_info[:]
 
         # Make sure the counter is only reset every N seconds. This prevents
         # setting a timer on manual refresh.
         if isinstance(caller, urwid.MainLoop):
-            self.main_loop.set_alarm_in(self.update_interval,
-                                        self._update_event_list,
-                                        user_data=True)
+            self.main_loop.set_alarm_in(self.update_interval, self._update_event_list, user_data=True)
 
-    # TODO: DRY the _event methods
-    def ack_event(self):
-        """ Ack an event. """
-
+    def _set_selected_event_state(self, state):
+        """Set Zenoss event state of selected event and refresh UI."""
         # Must have a focused event
         try:
             idx = self.ui.list_box.focus_position
@@ -825,101 +782,78 @@ oo $ $ \"$      o$$$$$$$$$    $$$$$$$$$$$$$    $$$$$$$$$o       $$$o$$o$
         except IndexError:
             return
 
-        # Ack in zenoss
-        self.zenoss.ack_events([event['evid']])
+        {
+            'acknowledged': self.zenoss.ack_events,
+            'closed': self.zenoss.close_events,
+            'new': self.zenoss.reopen_events,
+        }[state]([event['evid']])
 
-        # Delete from event list
-        if (ZenEvents.event_states['acknowledged'] not in
-                self.zenoss.params['eventState']):
+        if (ZenEvents.event_states[state] not in self.zenoss.params['eventState']):
             del self.z_events[idx]
         else:
             self.z_events[idx] = self.zenoss.get_event(event['evid'])
+
         urwid.emit_signal(self.ui.main_frame, 'update_event_list', None, False)
+
+    def ack_event(self):
+        """Ack an event."""
+        self._set_selected_event_state('acknowledged')
 
     def close_event(self):
-        """ Close an event. """
-
-        # Must have a focused event
-        try:
-            idx = self.ui.list_box.focus_position
-            event = self.z_events[idx]
-        except IndexError:
-            return
-
-        # Close in zenoss
-        self.zenoss.close_events([event['evid']])
-
-        # Delete from event list
-        if (ZenEvents.event_states['closed'] not in
-                self.zenoss.params['eventState']):
-            del self.z_events[idx]
-        else:
-            self.z_events[idx] = self.zenoss.get_event(event['evid'])
-        urwid.emit_signal(self.ui.main_frame, 'update_event_list', None, False)
+        """Close an event."""
+        self._set_selected_event_state('closed')
 
     def reopen_event(self):
-        """ Reopen an event. """
-
-        # Must have a focused event
-        try:
-            idx = self.ui.list_box.focus_position
-            event = self.z_events[idx]
-        except IndexError:
-            return
-
-        # Reopen in zenoss
-        self.zenoss.reopen_events([event['evid']])
-
-        # Delete from event list
-        if (ZenEvents.event_states['new'] not in
-                self.zenoss.params['eventState']):
-            del self.z_events[idx]
-        else:
-            self.z_events[idx] = self.zenoss.get_event(event['evid'])
-        urwid.emit_signal(self.ui.main_frame, 'update_event_list', None, False)
+        """Reopen an event."""
+        self._set_selected_event_state('new')
 
     def login(self, username, password):
-        """ Handle authentication. Initiates main window upon success. """
+        """Handle authentication. Initiates main window upon success."""
         self.zen_username = username
         self.zen_password = password
+
         try:
-            self.zenoss = ZenEvents(url=self.zen_url,
-                                    username=self.zen_username,
-                                    password=self.zen_password)
+            self.zenoss = ZenEvents(self.zen_url, self.zen_username, self.zen_password)
             self.zenoss.login()
+
             self.ui.login_window.set_message('')
             self.main_loop.widget = self.ui.main_frame
 
             # Start refreshing the event list periodially
-            self.main_loop.set_alarm_in(0, self._update_event_list,
-                                        user_data=True)
+            self.main_loop.set_alarm_in(0, self._update_event_list, user_data=True)
+
         except self.zenoss.Unauthorized:
             self.ui.login_window.password_w.set_edit_text('')
             self.ui.login_window.set_message('LOGIN FAILED')
 
     def quit(self, originator=None):
+        """Signal handler to quit the application."""
         raise urwid.ExitMainLoop()
 
     def show_event_filter_window(self):
+        """Put the event filter window in front."""
         self.main_loop.widget = self.ui.event_filter_window
 
     def show_main_window(self):
+        """Put the main window in front."""
         self.main_loop.widget = self.ui.main_frame
 
     def start(self):
+        """Setup UI and start the main loop."""
         # Set login window as the top most widget
         self.main_loop.widget = self.ui.login_window
         if self.auto_login:
-            # fill in the password
+            # Fill in the password
             self.ui.login_window.password_w.set_edit_text(self.zen_password)
-            # focus the login button
+            # Focus the login button
             self.ui.login_window.items.set_focus(5)
         self.main_loop.run()
 
 
 def main():
-    zh = ZenHest()
-    zh.start()
+    """Start the application."""
+    zenhest = ZenHest()
+    zenhest.start()
 
 if __name__ == '__main__':
     main()
