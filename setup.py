@@ -3,8 +3,10 @@
 
 from setuptools import setup
 
+from zenhest import __version__
+
 setup(name='zenhest',
-      version='0.0.1',
+      version=__version__,
       description='Text based event console for Zenoss',
       url='https://github.com/KimNorgaard/ZenHest',
       author=u'Kim Nørgaard',
