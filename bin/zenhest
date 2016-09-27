@@ -15,8 +15,9 @@ import urwid
 import keyring
 import clipboard
 
+sys.path.insert(0, os.path.dirname(sys.path[0]))
 
-__version__ = "0.0.2"
+from zenhest import __version__
 
 
 def log_debug(msg):
@@ -559,8 +560,8 @@ class UI(object):
 
     def _get_footer(self):
         self.footer = urwid.Text(
-            (u"ZenHest  -  Refresh(R) Filter(f) Ack(A) Close(C) Reopen(O) "
-             u"Copy All Info(Y) Copy Selected Info(y) Quit(q)"))
+            (u"ZenHest {}  -  Refresh(R) Filter(f) Ack(A) Close(C) Reopen(O) "
+             u"Copy All Info(Y) Copy Selected Info(y) Quit(q)").format(__version__))
 
         return urwid.AttrMap(urwid.Padding(self.footer, left=1, right=1), 'footer')
 

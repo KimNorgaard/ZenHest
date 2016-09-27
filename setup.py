@@ -26,6 +26,6 @@ setup(name='zenhest',
           'Topic :: System :: Monitoring',
           'Topic :: Utilities',
       ],
-      packages=[],
-      scripts=['zenhest'],
+      packages=['zenhest'],
+      scripts=['bin/zenhest'],
 )
