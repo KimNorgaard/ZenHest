@@ -9,10 +9,14 @@ import logging
 import urllib2
 import json
 import base64
+from httplib import HTTPException
 
 import urwid
 import keyring
 import clipboard
+
+
+__version__ = "0.0.2"
 
 
 def log_debug(msg):
@@ -28,9 +32,6 @@ if os.getenv('ZENHEST_DEBUG', None):
         format='%(asctime)s %(levelname)s %(message)s',
         level=logging.DEBUG)
     logger = logging.getLogger(__name__)
-
-
-log_debug('test')
 
 
 # ---- ZENOSS CLASSES ----
@@ -63,7 +64,13 @@ class ZenEvents(object):
 
         pass
 
-    def __init__(self, url, username, password):
+    class ConnectError(Exception):
+
+        """Thrown when connection failed."""
+
+        pass
+
+    def __init__(self, url, username, password, err_callback=None):
         self.url = '{}/zport/dmd/evconsole_router'.format(url)
         self.username = username
         self.password = password
@@ -81,6 +88,12 @@ class ZenEvents(object):
             'prodState': [1000],
         }
 
+        # Callback for urllib2 errors
+        if err_callback is not None:
+            self.err_callback = err_callback
+        else:
+            self.err_callback = self._urllib2_error_handler
+
     def update(self):
         """Update and sort self.events."""
         self.fetch_events()
@@ -90,6 +103,10 @@ class ZenEvents(object):
                                             k['details']['device_title'][0]),
                              reverse=True)
         return self.events
+
+    @classmethod
+    def _urllib2_error_handler(cls, original_exception):
+        raise original_exception
 
     def _req(self, method='query', evids=None, params=None, limit=None):
         """Perform API request to Zenoss."""
@@ -118,7 +135,15 @@ class ZenEvents(object):
 
         req.add_header('Authorization', 'Basic {}'.format(authstr))
 
-        res = urllib2.urlopen(req)
+        try:
+            res = urllib2.urlopen(req, timeout=5)
+        except urllib2.HTTPError, exception:
+            self.err_callback(exception)
+        except urllib2.URLError, exception:
+            self.err_callback(exception)
+        except HTTPException, exception:
+            self.err_callback(exception)
+
         return res
 
     def get_event(self, evid):
@@ -640,6 +665,7 @@ oo $ $ \"$      o$$$$$$$$$    $$$$$$$$$$$$$    $$$$$$$$$o       $$$o$$o$
             ('btn.focus', 'black', 'light gray'),
             ('footer', 'black', 'dark cyan'),
             ('event.focus', 'black', 'light gray'),
+            ('error', 'light red', 'black'),
             # critical
             ('severity_5', 'black', 'dark red'),
             # error
@@ -744,30 +770,34 @@ oo $ $ \"$      o$$$$$$$$$    $$$$$$$$$$$$$    $$$$$$$$$o       $$$o$$o$
             self.main_loop.draw_screen()
 
         # Get new data from zenoss
-        if use_zenoss:
-            self.z_events[:] = self.zenoss.update()
+        try:
+            if use_zenoss:
+                self.z_events[:] = self.zenoss.update()
 
-        # Populate event list with new data
-        self.ui.list_box.body[:] = [
-            urwid.AttrMap(EventText(event, self.ui.list_box.maxcol),
-                          'severity_'+str(event['severity']), 'event.focus')
-            for event in self.z_events]
+            # Populate event list with new data
+            self.ui.list_box.body[:] = [
+                urwid.AttrMap(EventText(event, self.ui.list_box.maxcol),
+                              'severity_'+str(event['severity']), 'event.focus')
+                for event in self.z_events]
 
-        # Try to restore focus
-        if saved_focus_idx:
-            try:
-                new_idx = next(i for (i, e) in enumerate(self.z_events) if e['evid'] == saved_evid)
-                self.ui.event_list.set_focus(new_idx)
-            except StopIteration:
-                pass
+            # Try to restore focus
+            if saved_focus_idx:
+                try:
+                    new_idx = next(i for (i, e) in enumerate(self.z_events) if e['evid'] == saved_evid)
+                    self.ui.event_list.set_focus(new_idx)
+                except StopIteration:
+                    pass
 
-        # Update event info on currently selected event
-        urwid.emit_signal(self.ui.list_box, 'update_event_info')
+            # Update event info on currently selected event
+            urwid.emit_signal(self.ui.list_box, 'update_event_info')
 
-        # Show HHGTTG smiley if there are no events
-        if not len(self.z_events):
-            self.ui.list_box.body[:] = [urwid.Padding(urwid.Text(self.smiley), 'center', 75)]
-            del self.ui.event_info[:]
+            # Show HHGTTG smiley if there are no events
+            if not len(self.z_events):
+                self.ui.list_box.body[:] = [urwid.Padding(urwid.Text(self.smiley), 'center', 75)]
+                del self.ui.event_info[:]
+        except self.zenoss.ConnectError:
+            # Handled by error handler
+            pass
 
         # Make sure the counter is only reset every N seconds. This prevents
         # setting a timer on manual refresh.
@@ -808,26 +838,56 @@ oo $ $ \"$      o$$$$$$$$$    $$$$$$$$$$$$$    $$$$$$$$$o       $$$o$$o$
         """Reopen an event."""
         self._set_selected_event_state('new')
 
+    def handle_login_net_error(self, original_exception):
+        """Show errors on connection failure during login."""
+        msg = 'COMMUNICATIONS FAILURE'
+        if hasattr(original_exception, 'reason'):
+            msg += ' {}'.format(original_exception.reason)
+        self.ui.login_window.set_message(msg)
+
+        raise ZenEvents.ConnectError
+
+    def handle_net_error(self, original_exception):
+        """Show errors on connection failure."""
+        msg = 'COMMUNICATIONS FAILURE\n\n'
+        if hasattr(original_exception, 'reason'):
+            msg += ' {}\n'.format(original_exception.reason)
+        if hasattr(original_exception, 'code'):
+            msg += ' {}'.format(original_exception.code)
+
+        self.ui.list_box.body[:] = [urwid.Padding(urwid.Text(('error', msg)),
+                                                  left=1, right=1)]
+        del self.ui.event_info[:]
+        raise ZenEvents.ConnectError
+
     def login(self, username, password):
         """Handle authentication. Initiates main window upon success."""
         self.zen_username = username
         self.zen_password = password
 
         try:
-            self.zenoss = ZenEvents(self.zen_url, self.zen_username, self.zen_password)
+            self.zenoss = ZenEvents(self.zen_url, self.zen_username,
+                                    self.zen_password,
+                                    err_callback=self.handle_login_net_error)
             self.zenoss.login()
 
             self.ui.login_window.set_message('')
             self.main_loop.widget = self.ui.main_frame
 
+            self.zenoss.err_callback = self.handle_net_error
+
             # Start refreshing the event list periodially
             self.main_loop.set_alarm_in(0, self._update_event_list, user_data=True)
 
+        except self.zenoss.ConnectError:
+            # Handled by err_callback
+            pass
         except self.zenoss.Unauthorized:
             self.ui.login_window.password_w.set_edit_text('')
             self.ui.login_window.set_message('LOGIN FAILED')
 
-    def quit(self, originator=None):
+    @classmethod
+    def quit(cls, originator=None):
         """Signal handler to quit the application."""
         raise urwid.ExitMainLoop()
 
