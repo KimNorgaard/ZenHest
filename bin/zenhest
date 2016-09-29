@@ -10,6 +10,7 @@ import urllib2
 import json
 import base64
 from httplib import HTTPException
+from socket import timeout as TimeoutException
 
 import urwid
 import keyring
@@ -137,12 +138,14 @@ class ZenEvents(object):
         req.add_header('Authorization', 'Basic {}'.format(authstr))
 
         try:
-            res = urllib2.urlopen(req, timeout=5)
+            res = urllib2.urlopen(req, timeout=10)
         except urllib2.HTTPError, exception:
             self.err_callback(exception)
         except urllib2.URLError, exception:
             self.err_callback(exception)
         except HTTPException, exception:
+            self.err_callback(exception)
+        except TimeoutException, exception:
             self.err_callback(exception)
 
         return res
