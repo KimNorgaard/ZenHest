@@ -27,6 +27,20 @@ If you want it to look elsewhere, set it with ZENHEST_KEYRING.
 ZENHEST_UPDATE_INTERVAL sets how often (in seconds) ZenHest will poll Zenoss of
 event updates. The default is 30.
 
+## ZENHEST_EVENT_ACTION_ENABLED (optional)
+Enabled ZenHest to call a command for events.
+Uses ZENHEST_EVENT_ACTION_COMMAND as the command to trigger.
+Set to 'yes', 'true' or '1' to enable. Default is 0.
+
+## ZENHEST_EVENT_ACTION_COMMAND (optional)
+Command to run on event actions. Defaults to '/bin/true'.
+
+{} will be replaced by the currently selected event id.
+
+Example:
+export ZENHEST_EVENT_ACTION="/usr/bin/open https://my_handler_url/event/{}"
+
+
 # Navigation
 
 ## General
@@ -41,6 +55,7 @@ event updates. The default is 30.
     A   : Acknowledge selected event
     C   : Close selected event
     O   : Reopen selected event
+    J   : Trigger event action
 
 ## Main Window - Event Info focused
 

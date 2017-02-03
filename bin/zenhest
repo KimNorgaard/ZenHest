@@ -9,6 +9,8 @@ import logging
 import urllib2
 import json
 import base64
+import subprocess
+import shlex
 from httplib import HTTPException
 from socket import timeout as TimeoutException
 
@@ -139,13 +141,13 @@ class ZenEvents(object):
 
         try:
             res = urllib2.urlopen(req, timeout=10)
-        except urllib2.HTTPError, exception:
+        except urllib2.HTTPError as exception:
             self.err_callback(exception)
-        except urllib2.URLError, exception:
+        except urllib2.URLError as exception:
             self.err_callback(exception)
-        except HTTPException, exception:
+        except HTTPException as exception:
             self.err_callback(exception)
-        except TimeoutException, exception:
+        except TimeoutException as exception:
             self.err_callback(exception)
 
         return res
@@ -345,6 +347,38 @@ class EventFilterCheckbox(urwid.CheckBox):
         urwid.emit_signal(self.window, 'change_filter', state, *user_data)
 
 
+class EventActionWindow(urwid.Overlay):
+    """A widget for show event action results."""
+
+    def __init__(self, top_w):
+        urwid.register_signal(EventActionWindow, ['event_action_close'])
+
+        content = urwid.SimpleListWalker([])
+
+        self.message = urwid.Text('', 'left')
+
+        # Construct window content
+        content.append(urwid.Text('EVENT ACTION', 'center'))
+        content.append(urwid.Divider())
+        content.append(self.message)
+        content.append(urwid.Divider())
+        content.append(urwid.Text("Press ESC or 'q' to close window.", 'center'))
+
+        wrap = urwid.LineBox(urwid.ListBox(content))
+
+        super(EventActionWindow, self).__init__(wrap, top_w, 'center', 80, 'middle', 24)
+
+    def set_message(self, message):
+        """Set content of window."""
+        self.message.set_text(message)
+
+    def keypress(self, size, key):
+        if key in('q', 'Q', 'esc'):
+            urwid.emit_signal(self, 'event_action_close')
+
+        return super(EventActionWindow, self).keypress(size, key)
+
+
 class EventFilterWindow(urwid.Overlay):
 
     """A widget for setting event filters."""
@@ -483,8 +517,9 @@ class MainFrame(urwid.Frame):
     def __init__(self, *args, **kwargs):
         urwid.register_signal(MainFrame, ['update_event_list', 'quit',
                                           'ack_event', 'close_event',
-                                          'reopen_event', 'create_jira',
-                                          'show_event_filter'])
+                                          'reopen_event', 'event_action',
+                                          'show_event_filter',
+                                          'event_action_result'])
 
         super(MainFrame, self).__init__(*args, **kwargs)
 
@@ -495,8 +530,7 @@ class MainFrame(urwid.Frame):
             'A': 'ack_event',
             'C': 'close_event',
             'O': 'reopen_event',
-            # TODO: not imeplemented yet
-            'J': 'create_jira',
+            'J': 'event_action',
             'f': 'show_event_filter',
         }
 
@@ -557,6 +591,8 @@ class UI(object):
 
         self.event_filter_window = EventFilterWindow(self.main_frame)
 
+        self.event_action_window = EventActionWindow(self.main_frame)
+
     def _get_header(self):
         self.header = urwid.Text('ZenHest')
         return self.header
@@ -564,7 +600,8 @@ class UI(object):
     def _get_footer(self):
         self.footer = urwid.Text(
             (u"ZenHest {}  -  Refresh(R) Filter(f) Ack(A) Close(C) Reopen(O) "
-             u"Copy All Info(Y) Copy Selected Info(y) Quit(q)").format(__version__))
+             u"Action(J) Copy All Info(Y) Copy Selected Info(y) "
+             u"Quit(q)").format(__version__))
 
         return urwid.AttrMap(urwid.Padding(self.footer, left=1, right=1), 'footer')
 
@@ -628,6 +665,15 @@ oo $ $ \"$      o$$$$$$$$$    $$$$$$$$$$$$$    $$$$$$$$$o       $$$o$$o$
         if self.zen_url is None:
             print("ZENHEST_URL not set. Set it to 'http(s)://server:port'.")
             sys.exit(1)
+
+        self.event_action_command = os.getenv('ZENHEST_EVENT_ACTION_COMMAND',
+                                              '/bin/true')
+        event_action_enabled = os.getenv('ZENHEST_EVENT_ACTION_ENABLED', '0')
+
+        if event_action_enabled.lower() in ['yes', 'true', '1']:
+            self.event_action_enabled = True
+        else:
+            self.event_action_enabled = False
 
         self.keyring_name = os.getenv('ZENHEST_KEYRING', 'zenhest')
         self.update_interval = int(os.getenv('ZENHEST_UPDATE_INTERVAL', 30))
@@ -708,11 +754,17 @@ oo $ $ \"$      o$$$$$$$$$    $$$$$$$$$$$$$    $$$$$$$$$o       $$$o$$o$
         urwid.connect_signal(self.ui.main_frame, 'ack_event', self.ack_event)
         urwid.connect_signal(self.ui.main_frame, 'close_event', self.close_event)
         urwid.connect_signal(self.ui.main_frame, 'reopen_event', self.reopen_event)
+        urwid.connect_signal(self.ui.main_frame, 'event_action_result', self.handle_event_action_result)
+        if self.event_action_enabled:
+            urwid.connect_signal(self.ui.main_frame, 'event_action', self.event_action)
 
         # Event filter window
         urwid.connect_signal(self.ui.event_filter_window, 'update_event_list', self._update_event_list)
         urwid.connect_signal(self.ui.event_filter_window, 'event_filter_close', self.show_main_window)
         urwid.connect_signal(self.ui.event_filter_window, 'change_filter', self._change_zenoss_parameter)
+
+        # Event action window
+        urwid.connect_signal(self.ui.event_action_window, 'event_action_close', self.show_main_window)
 
     def _change_zenoss_parameter(self, state, param, value):
         """Signal handler used for changing zenoss paramters."""
@@ -842,6 +894,40 @@ oo $ $ \"$      o$$$$$$$$$    $$$$$$$$$$$$$    $$$$$$$$$o       $$$o$$o$
         """Reopen an event."""
         self._set_selected_event_state('new')
 
+    def event_action(self):
+        """Runs event action on selected event."""
+        # Must have a focused event
+        try:
+            idx = self.ui.list_box.focus_position
+            event = self.z_events[idx]
+        except IndexError:
+            return
+
+        command = self.event_action_command.replace('{}', event['evid'])
+        try:
+            subprocess.check_output(shlex.split(command),
+                                    stderr=subprocess.STDOUT)
+            status_code = 0
+            stdout = ''
+        except subprocess.CalledProcessError as e:
+            status_code = e.returncode
+            stdout = e.output
+        except Exception as e:
+            status_code = -1
+            stdout = str(e)
+
+        urwid.emit_signal(self.ui.main_frame, 'event_action_result',
+                          command, status_code, stdout)
+
+    def handle_event_action_result(self, command, status_code, stdout):
+        if status_code != 0:
+            msg = "Event action failed.\n"
+            msg += "Status code: {}\n".format(status_code)
+            msg += "Command: {}\n".format(command)
+            msg += "Output:\n{}".format(stdout)
+            self.ui.event_action_window.set_message(msg)
+            self.show_event_action_window()
+
     def handle_login_net_error(self, original_exception):
         """Show errors on connection failure during login."""
         msg = 'COMMUNICATIONS FAILURE'
@@ -898,6 +984,10 @@ oo $ $ \"$      o$$$$$$$$$    $$$$$$$$$$$$$    $$$$$$$$$o       $$$o$$o$
     def show_event_filter_window(self):
         """Put the event filter window in front."""
         self.main_loop.widget = self.ui.event_filter_window
+
+    def show_event_action_window(self):
+        """Put the event action window in front."""
+        self.main_loop.widget = self.ui.event_action_window
 
     def show_main_window(self):
         """Put the main window in front."""
